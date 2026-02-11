@@ -121,6 +121,7 @@ And these new commands:
 |-------------------------------|-------------------|----------------------------------------------------------------------------------------------------------|
 | split-cycleworkspaces         | `next/prev/+x/-x` | (x: int) Cycle through workspaces on the current monitor                                                 |
 | split-cycleworkspacesnowrap   | `next/prev/+x/-x` | (x: int) Cycle through workspaces on the current monitor. Doesn't wrap around to first or last workspace (deprecated: set `enable_wrapping = false` in the plugin config instead) | 
+| split-cyclmovetoeworkspace    | `next/prev/+x/-x` | (x: int) Cycle through workspaces on the current monitor and move the active window to them              |
 | split-changemonitor           | `next/prev/+x/-x` | (x: int) Move a window to the next/previous monitor                                                      |
 | split-changemonitorsilent     | `next/prev/+x/-x` | (x: int) Move a window to the next/previous monitor without focus change                                 |
 | split-grabroguewindows        |                   | After disconnecting a monitor, call this to move all rogue windows to the current monitor                |
