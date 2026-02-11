@@ -395,7 +395,7 @@ static SDispatchResult splitCycleMoveToWorkspace(const std::string& value)
         return {.success = true, .error = ""}; // null operation because wrapping is disabled
     }
 
-    auto const result = HyprlandAPI::invokeHyprctlCommand("dispatch", "movetoworkspacesilent " + workspaces[index]);
+    auto const result = HyprlandAPI::invokeHyprctlCommand("dispatch", "movetoworkspace " + workspaces[index]);
     return {.success = result == "ok", .error = result};
 }
 
