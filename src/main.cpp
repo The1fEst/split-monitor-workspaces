@@ -244,6 +244,44 @@ static PHLMONITOR getCurrentMonitor()
     return g_pCompositor->getMonitorFromCursor();
 }
 
+static int findWorkspaceIndexInMonitor(const PHLMONITOR& monitor, const std::string& workspaceName)
+{
+    const auto& workspaces = g_vMonitorWorkspaceMap[monitor->m_id];
+    for (int i = 0; i < getMonitorMaxWorkspaces(monitor->m_name); i++) {
+        if (workspaces[i] == workspaceName) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int applyIndexWrapping(int index, int maxIndex, bool nowrap)
+{
+    if (index < 0) {
+        if (nowrap) {
+            return -1; // sentinel value indicating no wrap
+        }
+        return maxIndex - 1; // wrap around to the last index
+    }
+    if (index >= maxIndex) {
+        if (nowrap) {
+            return -1; // sentinel value indicating no wrap
+        }
+        return 0; // wrap around to the first index
+    }
+    return index;
+}
+
+static PHLWORKSPACE getOrCreateWorkspace(const std::string& workspaceName)
+{
+    PHLWORKSPACE workspace = g_pCompositor->getWorkspaceByName(workspaceName);
+    if (workspace.get() == nullptr) {
+        auto const workspaceID = getWorkspaceIDNameFromString(workspaceName).id;
+        workspace = g_pCompositor->createNewWorkspace(workspaceID, MONITOR_INVALID);
+    }
+    return workspace;
+}
+
 static SDispatchResult splitWorkspace(const std::string& workspace)
 {
     if (!g_linkMonitors) {
@@ -279,38 +317,24 @@ static SDispatchResult cycleWorkspaces(const std::string& value, bool nowrap = f
     for (const PHLMONITOR& monitor : monitorsToCycle) {
         Log::logger->log(Log::DEBUG, "[split-monitor-workspaces] Cycling workspace on monitor {} (ID {}) by {}", monitor->m_name, monitor->m_id, delta);
         auto const workspaces = g_vMonitorWorkspaceMap[monitor->m_id];
-        int index = -1;
-        for (int i = 0; i < getMonitorMaxWorkspaces(monitor->m_name); i++) {
-            if (workspaces[i] == monitor->m_activeWorkspace->m_name) {
-                index = i;
-                break;
-            }
-        }
+        int index = findWorkspaceIndexInMonitor(monitor, monitor->m_activeWorkspace->m_name);
+
         if (index == -1) {
             Log::logger->log(Log::WARN, "[split-monitor-workspaces] Could not find active workspace in monitor workspaces. Aborting cycle.");
             return {.success = false, .error = "Could not find active workspace in monitor workspaces"};
         }
 
         index += delta;
-        if (index < 0) {
-            if (nowrap) {
-                return {.success = true, .error = ""}; // null operation because wrapping is disabled
-            }
-            index = getMonitorMaxWorkspaces(monitor->m_name) - 1; // wrap around to the last workspace
+        index = applyIndexWrapping(index, getMonitorMaxWorkspaces(monitor->m_name), nowrap);
+        if (index == -1) {
+            return {.success = true, .error = ""}; // null operation because wrapping is disabled
         }
-        else if (index >= getMonitorMaxWorkspaces(monitor->m_name)) {
-            if (nowrap) {
-                return {.success = true, .error = ""}; // null operation because wrapping is disabled
-            }
-            index = 0; // wrap around to the first workspace
+
+        auto workspaceRef = getOrCreateWorkspace(workspaces[index]);
+        if (workspaceRef.get() != nullptr) {
+            g_pCompositor->moveWorkspaceToMonitor(workspaceRef, monitor);
+            monitor->changeWorkspace(workspaceRef, false, true, monitor != getCurrentMonitor());
         }
-        auto workspaceRef = g_pCompositor->getWorkspaceByName(workspaces[index]);
-        if (workspaceRef.get() == nullptr) {
-            // create it if it doesn't exist yet
-            auto const workspaceID = getWorkspaceIDNameFromString(workspaces[index]).id;
-            workspaceRef = g_pCompositor->createNewWorkspace(workspaceID, monitor->m_id);
-        }
-        monitor->changeWorkspace(workspaceRef, false, true, monitor != getCurrentMonitor());
     }
     return {.success = true, .error = ""};
 }
@@ -343,6 +367,35 @@ static SDispatchResult splitMoveToWorkspace(const std::string& workspace)
 static SDispatchResult splitMoveToWorkspaceSilent(const std::string& workspace)
 {
     auto const result = HyprlandAPI::invokeHyprctlCommand("dispatch", "movetoworkspacesilent " + getWorkspaceFromMonitor(getCurrentMonitor(), workspace));
+    return {.success = result == "ok", .error = result};
+}
+
+static SDispatchResult splitCycleMoveToWorkspace(const std::string& value)
+{
+    int const delta = getDelta(value);
+    if (delta == 0) {
+        Log::logger->log(Log::WARN, "[split-monitor-workspaces] Invalid cycle value: {}", value.c_str());
+        return {.success = false, .error = "Invalid cycle value: " + value};
+    }
+
+    PHLMONITOR monitor = getCurrentMonitor();
+    Log::logger->log(Log::DEBUG, "[split-monitor-workspaces] Cycling move on monitor {} (ID {}) by {}", monitor->m_name, monitor->m_id, delta);
+
+    auto const workspaces = g_vMonitorWorkspaceMap[monitor->m_id];
+    int index = findWorkspaceIndexInMonitor(monitor, monitor->m_activeWorkspace->m_name);
+
+    if (index == -1) {
+        Log::logger->log(Log::WARN, "[split-monitor-workspaces] Could not find active workspace in monitor workspaces. Aborting cycle move.");
+        return {.success = false, .error = "Could not find active workspace in monitor workspaces"};
+    }
+
+    index += delta;
+    index = applyIndexWrapping(index, getMonitorMaxWorkspaces(monitor->m_name), !g_enableWrapping);
+    if (index == -1) {
+        return {.success = true, .error = ""}; // null operation because wrapping is disabled
+    }
+
+    auto const result = HyprlandAPI::invokeHyprctlCommand("dispatch", "movetoworkspacesilent " + workspaces[index]);
     return {.success = result == "ok", .error = result};
 }
 
@@ -721,6 +774,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle)
     HyprlandAPI::addDispatcherV2(PHANDLE, "split-workspace", splitWorkspace);
     HyprlandAPI::addDispatcherV2(PHANDLE, "split-cycleworkspaces", splitCycleWorkspaces);
     HyprlandAPI::addDispatcherV2(PHANDLE, "split-cycleworkspacesnowrap", splitCycleWorkspacesNowrap);
+    HyprlandAPI::addDispatcherV2(PHANDLE, "split-cyclemovetoworkspace", splitCycleMoveToWorkspace);
     HyprlandAPI::addDispatcherV2(PHANDLE, "split-movetoworkspace", splitMoveToWorkspace);
     HyprlandAPI::addDispatcherV2(PHANDLE, "split-movetoworkspacesilent", splitMoveToWorkspaceSilent);
     HyprlandAPI::addDispatcherV2(PHANDLE, "split-changemonitor", splitChangeMonitor);
